@@ -1,4 +1,16 @@
 #!/usr/bin/perl -w
+# Dev: Jordan C. Uehara (Jordan.C.Uehara@nasa.gov)
+# Mission: ICESAT2: General
+
+# Version: 1.0
+# Originally created by Dominik P. edited and vetted for GNU usage.
+# 1.0: Initial development
+
+# TODO
+# 1.1 setup limits to read from a configuration file instead
+# 2.x Rewrite as python script
+
+
 use strict;
 use warnings;
 # Moving usage to argument[0] where /dev/stdout or whatever can be used
@@ -444,6 +456,3 @@ sub block_dump
     $dmesg = "Result not available - Permission denied on /proc/sys/vm/block_dump\n" unless $dmesg;
     return $dmesg;
 }
-
-
-# Dominik P. ServInt MST - Aug 2015 - v0.8

@@ -1,10 +1,18 @@
 #!/usr/bin/python
+# Dev: Jordan C. Uehara (Jordan.C.Uehara@nasa.gov)
+# Mission: IceSAT2: General
+
+# Version: 1.0
+# 1.0: Initial development
+
+# TODO
+# 1.x: fix imports
+# 2.x: rewrite as threaded script so that multiple pings can occur on time
 
 import subprocess, re, time
 from datetime import datetime
 from datetime import timedelta
 
-# target = "google.com"
 regex = r"time=(\d+(.)(\d+))"
 
 # Set target configuration file and init array
@@ -21,8 +29,8 @@ def ping(host="google.com"):
                     match = re.search(regex, line)
                     results = match.group(1)
                     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    # Output as tab seperated columns
                     print date + "\t" + host + "\t" + results
-
     except subprocess.CalledProcessError as e:
         output = e.output
 
