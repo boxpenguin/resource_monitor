@@ -1,7 +1,9 @@
 #!/usr/bin/perl -w
 use strict;
 use warnings;
-my $LOG   = '/var/log/resource_monitor.log';
+# Moving usage to argument[0] where /dev/stdout or whatever can be used
+# This will allow the usage within mail scripts to pull properly, could also be used to make a temp file somewhere
+my $LOG   = $ARGV[0];
 my $IO_LIMIT   = '40';
 my $LOAD_LIMIT = '24';
 my $RAM_LIMIT  = '.90'; #percent of total .90 = 90%
