@@ -3,7 +3,7 @@ use strict;
 use warnings;
 my $LOG   = '/var/log/resource_monitor.log';
 my $IO_LIMIT   = '40';
-my $LOAD_LIMIT = '6';
+my $LOAD_LIMIT = '24';
 my $RAM_LIMIT  = '.90'; #percent of total .90 = 90%
 my $NF_LIMIT   = '.90'; #percent of total .90 = 90%
 
