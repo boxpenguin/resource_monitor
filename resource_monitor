@@ -1,0 +1,447 @@
+#!/usr/bin/perl -w
+use strict;
+use warnings;
+my $LOG   = '/var/log/resource_monitor.log';
+my $IO_LIMIT   = '40';
+my $LOAD_LIMIT = '6';
+my $RAM_LIMIT  = '.90'; #percent of total .90 = 90%
+my $NF_LIMIT   = '.90'; #percent of total .90 = 90%
+
+
+################################### Do Not Edit Below This Line ###################################
+
+
+rotate_log($LOG) if -e $LOG;
+open(LOG, ">> $LOG") or die "can not open $LOG: $!\n";
+&main;
+close LOG;
+
+sub main
+{
+    chomp(my $date = `date`);
+
+    my $nf_compatible = 0;
+    $nf_compatible = 1 if -r '/proc/user_beancounters';
+
+    my @load    = chk_load()    unless $LOAD_LIMIT == 0;
+    my $iowait  = chk_io()      unless $IO_LIMIT   == 0;
+    my @numfile = chk_numfile() unless $NF_LIMIT   == 0 || $nf_compatible == 0;
+
+    my (@ram, $hr_ram_used, $hr_ram_total);
+
+    unless ($RAM_LIMIT  == 0){
+       @ram     = chk_ram();
+       $hr_ram_used  = hr_size($ram[0]);
+       $hr_ram_total = hr_size($ram[1]);
+    }
+
+    @load    = (0,0) if $LOAD_LIMIT == 0;
+    $iowait  = 0     if $IO_LIMIT   == 0;
+    @numfile = (0,0) if $NF_LIMIT   == 0;
+    @ram     = (0,0) if $RAM_LIMIT  == 0;
+
+
+    print LOG "$date - Load: $load[0], $load[1], $load[2]";
+    print LOG " - IO Wait: $iowait"                        if $IO_LIMIT  && ($IO_LIMIT  != 0);
+    print LOG " - Ram: $hr_ram_used\/$hr_ram_total"        if $RAM_LIMIT && ($RAM_LIMIT != 0);
+    print LOG " - Num open file: $numfile[0]\/$numfile[1]" if $NF_LIMIT  && ($nf_compatible == 1);
+    print LOG "\n";
+
+    &run_ram_cmds     if $RAM_LIMIT  && ($RAM_LIMIT  != 0) && ($ram[0]     >= ($ram[1] * $RAM_LIMIT));
+    &run_io_cmds      if $IO_LIMIT   && ($IO_LIMIT   != 0) && $iowait      >= $IO_LIMIT;
+    &run_load_cmds    if $LOAD_LIMIT && ($LOAD_LIMIT != 0) && $load[0]     >= $LOAD_LIMIT;
+    &run_numfile_cmds if $NF_LIMIT   && ($NF_LIMIT   != 0) && $nf_compatible && ($numfile[0] >= ($numfile[1] * $NF_LIMIT));
+}
+
+
+sub rotate_log
+{
+    my $log   = shift;
+    my $limit = 52428800;             # 50Mb
+    my $size  = -s $log if -e $log;
+
+    if ($size >= $limit) {
+        my $log1 = $log . '.1';
+        my $log2 = $log . '.2';
+        my $log3 = $log . '.3';
+        my $log4 = $log . '.4';
+
+        unlink $log4 if -e $log4;
+        rename $log3, $log4 if -e $log3;
+        rename $log2, $log3 if -e $log2;
+        rename $log1, $log2 if -e $log1;
+        rename $log,  $log1 if -e $log;
+    }
+}
+
+
+sub chk_load
+{
+    my $load_file = `cat /proc/loadavg`;
+    my @loadavg = split(/\s+/, $load_file);
+    my @load = ($loadavg[0], $loadavg[1], $loadavg[2]);
+    return @load;
+}
+
+
+sub chk_io
+{
+    my $vmstat = `vmstat 1 2`;
+    my $search_variable = 'wa';
+    my ($header, $row);
+
+    my @vmstat_lines = split(/\n/, $vmstat);
+
+    for (@vmstat_lines){
+         if (/ wa/){
+             $header = $_;
+         }
+    }
+
+    $row = $vmstat_lines[-1];
+
+    my $io_wait = column_match($header, $row, $search_variable);
+
+    return $io_wait;
+}
+
+
+sub column_match
+{
+    my ($header, $row, $search_variable) = @_;
+    my $search_col_num;
+    my $column_match_debug = 0;
+
+    chomp $header;
+    chomp $row;
+    my @header = split(/\s+/, $header);
+    my @row    = split(/\s+/, $row);
+
+    if ($column_match_debug){
+        print "## Debug Info for column_match sub\n\n";
+        print "Debug header          - $header\n";
+        print "Debug row             - $row\n";
+        print "Debug search_variable - $search_variable\n";
+
+        print "Debug Header Array:\n";
+        for (@header){
+             print "\t#$_#\n";
+        }
+
+        print "Debug Row Array:\n";
+        for (@row){
+             print "\t#$_#\n";
+        }
+    }
+
+    shift (@header) if $header[0] =~ /\s+/ || $header[0] eq '';
+    shift (@row) if $header[0] =~ /\s+/ || $row[0] eq '';
+
+    print "Debug \$header\[0\]: $header[0]\n" if $column_match_debug;
+    print "Debug \$row\[0\]:    $row[0]\n" if $column_match_debug;
+
+    my $count = 0;
+    for (@header){
+
+         print "\t$count - $_ - $row[$count]\n" if $column_match_debug;
+         if ($_ =~ /$search_variable/ && $column_match_debug){
+             print "Debug - Match Found: header:$_ row:$row[$count]\n";
+         }
+
+         $search_col_num = $count if ($_ =~ /$search_variable/);
+         $count++;
+    }
+
+    my $return = $row[$search_col_num];
+
+    print "\nDebug \$return : $return\n" if $column_match_debug;
+    print "\n## End - Debug Info for column_match sub\n\n" if $column_match_debug;
+
+    return $return;
+}
+
+
+sub chk_ram
+{
+    my @free = `/usr/bin/free -k`;
+    my (@ram_used_total, $total, $used, $cached);
+    my $debug = 0;
+
+    my @free_row_1 = split(/\s+/, $free[0]);
+    my @free_row_2 = split(/\s+/, $free[1]);
+    my @free_row_3 = split(/\s+/, $free[2]);
+
+    my $column_count = scalar @free_row_1 - 1;
+
+    for (0..$column_count){
+        print "count = $_ -- $free_row_2[$_]\n" if $debug;
+
+        $total  = $free_row_2[$_] if $free_row_1[$_] =~ /total/;
+        $used   = $free_row_3[$_] if $free_row_1[$_] =~ /used/;
+    }
+
+    if ($debug){
+        print "total : $total\n";
+        print "used  : $used\n";
+    }
+
+    $total *= 1024;
+    $used  *= 1024;
+
+    @ram_used_total = ($used, $total);
+    return @ram_used_total;
+}
+
+
+sub chk_numfile
+{
+    my $numfile_bean = `cat /proc/user_beancounters |grep numfile`;
+    my @values = split(/\s+/, $numfile_bean);
+    my @numfile_cur_max_fails = ($values[2], $values[5], $values[6]);
+
+    return @numfile_cur_max_fails;
+}
+
+
+sub run_load_cmds
+{
+    my @cmds = ('pstree',
+                'top -bHc -n1 -w 5000');
+
+    push(@cmds, 'lynx localhost/server-status -dump -width 600 | grep -v OPTIONS') if is_cpanel();
+
+    run('LOAD', \@cmds);
+}
+
+
+sub run_io_cmds
+{
+    my @cmds = ('pstree',
+                'disk_top()',
+                'top -bHc -n1 -w 5000',
+                'ps auwx',
+                'block_dump()',
+                );
+
+    run('IO', \@cmds);
+}
+
+
+sub run_ram_cmds
+{
+
+    my @cmds  = ('pstree',
+                 'ps axo size,vsize,start_time,cmd | sort -rn',
+                 'netstat -anp');
+
+    run('RAM', \@cmds);
+}
+
+
+sub run_numfile_cmds
+{
+    my @cmds = ('pstree',
+                'lsof');
+
+    run('Number Open Files', \@cmds);
+}
+
+
+sub run
+{
+    my $limit = shift;
+    my $ref = shift;
+    my @cmds = @$ref;
+    my (@cmd_names_and_output, $cmd_out);
+    no strict "refs"; # required to call function using variable
+
+
+    for my $cmd_name(@cmds){
+
+           if ($cmd_name =~ /(.*)\(\)$/){
+               $cmd_out = &$1;
+               push (@cmd_names_and_output, $cmd_name);
+               push (@cmd_names_and_output, $cmd_out);
+           }else{
+               my $cmd_out = `$cmd_name`;
+               push (@cmd_names_and_output, $cmd_name);
+               push (@cmd_names_and_output, $cmd_out);
+           }
+
+    }
+
+    print_to_log($limit, \@cmd_names_and_output);
+}
+
+
+
+sub print_to_log
+{
+     my $limit = shift;
+     my $ref = shift;
+     my @cmd_names_and_output = @$ref;
+
+     my $cnt = 1;
+
+     print LOG "\n\n### Limit Hit - $limit\n";
+
+     for (@cmd_names_and_output){
+          if ($cnt % 2){
+              print LOG "\n" . '*' x 20 . " $_ " . '*' x 20 . "\n\n";
+          }else{
+              print LOG "$_\n";
+          }
+          $cnt++;
+     }
+
+     print LOG '#' x 110 . "\n\n";
+}
+
+
+sub is_cpanel
+{
+    my $ret = 1 if -e '/usr/local/cpanel/version';
+    return $ret;
+}
+
+
+sub hr_size
+{
+    my $num = shift;
+    my ($whole, $size);
+
+    if ($num =~ /^(\d+)\./){ $whole = $1; }
+    else{ $whole = $num; }
+
+
+    if    ($whole >= 1073741824){
+           $size = $whole / 1024 / 1024 / 1024;
+           $size = sprintf("%.1fG", $size);
+    }
+    elsif ($whole >= 1048576){
+           $size = $whole / 1024 / 1024;
+           $size = sprintf("%.1fM", $size);
+    }
+    elsif ($whole >= 1){
+           $size = $whole / 1024;
+           $size = sprintf("%.1fK", $size);
+    }else  {$size   = 0;}
+
+    return $size;
+}
+
+
+sub disk_top
+{
+    my $poll_time = '20'; #seconds
+    my $ds = chk_pid_rw();
+
+    sleep $poll_time; # wait time for IO stats to gather
+    $ds = chk_pid_rw($ds, '1');
+    my $io_list = sort_log_and_print_io_usage($ds, $poll_time);
+    return $io_list;
+}
+
+
+sub chk_pid_rw
+{
+    my $ds = $_[0];
+    my $second_run = $_[1] || 0;
+
+    for my $pid_io_path (glob("/proc/*/io")) {
+        next unless $pid_io_path =~ m|^/proc/(\d+)/io$|;
+        my $pid = $1;
+
+  open IO, $pid_io_path or next;
+
+        unless ($ds->{$pid}) {
+            $ds->{$pid}->{'first'} = { read => 0, write => 0};
+        }
+
+while (<IO>) {
+          if (/^(read|write)_bytes:\s+(\d+)/) {
+              my ($rw, $val) = ($1, $2);
+
+              $ds->{$pid}->{'first'}->{$rw} = $val if $ds->{$pid}->{'first'}->{$rw} == 0;
+              $ds->{$pid}->{'current'}->{$rw} = $val;
+          }
+        }
+
+        if($second_run){
+          my $read  = ($ds->{$pid}->{'current'}->{'read'} || 0)  - ($ds->{$pid}->{'first'}->{'read'} || 0);
+          my $write = ($ds->{$pid}->{'current'}->{'write'} || 0) - ($ds->{$pid}->{'first'}->{'write'} || 0);
+          my $total = $read + $write;
+
+          $ds->{$pid}->{'read'} = $read;
+          $ds->{$pid}->{'write'} = $write;
+          $ds->{$pid}->{'total'} = $total;
+        }
+     }
+
+     return $ds;
+}
+
+
+sub sort_log_and_print_io_usage
+{
+    my $ds = shift;
+    my $poll_time = shift;
+    my %pid_total = ();
+    my ($head, @rows, $out);
+
+    for (keys %$ds){
+         $pid_total{$_} = $ds->{$_}->{'total'} if (defined $ds->{$_}->{'total'} && $ds->{$_}->{'total'} != 0);
+    }
+    push(@rows, "PID         Read      Write   Total(R/W)      Process\n");
+    for (reverse(sort {$pid_total{$a} <=> $pid_total{$b}} (keys %pid_total))){
+         push(@rows, sprintf("%-7s %8s %10s %12s      %-7s\n", "$_", $ds->{$_}->{'read'}, $ds->{$_}->{'write'}, "$pid_total{$_}", get_proc_info($_)));
+    }
+    push(@rows, "\n\* IO is polled for $poll_time seconds to get these results\n");
+
+    $out = join('', @rows);
+    return $out;
+}
+
+
+sub get_proc_info
+{
+   my $pid = shift;
+
+   my $exe = readlink("/proc/$pid/exe");
+   my $cwd = readlink("/proc/$pid/cwd");
+   my $strings_path = '/usr/bin/strings';
+   my $cmdline;
+
+   if(-x $strings_path){
+      my @string = `$strings_path /proc/$pid/cmdline`;
+      for (@string){ chomp };
+      $cmdline = join (' ', @string);
+   }else{
+      open(CMDLINE, "< /proc/$pid/cmdline");
+      my $cmdline = <CMDLINE>;
+      close CMDLINE;
+   }
+
+   my $proc_info = "$exe $cwd/$cmdline";
+
+   return $proc_info;
+}
+
+
+sub block_dump
+{
+    my $result = `echo 1 > /proc/sys/vm/block_dump`;
+    my $dmesg;
+
+    if ($result =~ /Permission denied/){
+        sleep 35;
+        $dmesg = `dmesg | egrep "READ|WRITE|dirtied" | egrep -o '([a-zA-Z]*)' | sort | uniq -c | sort -rn | head`;
+        system('echo 0 > /proc/sys/vm/block_dump');
+    }
+
+    $dmesg = "Result not available - Permission denied on /proc/sys/vm/block_dump\n" unless $dmesg;
+    return $dmesg;
+}
+
+
+# Dominik P. ServInt MST - Aug 2015 - v0.8
