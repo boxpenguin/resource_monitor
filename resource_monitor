@@ -7,9 +7,12 @@
 # 1.0: Initial development
 
 # TODO
+# 1.01 Resolve :192 error about not finding any used ram due to a bad row count RM-01
 # 1.1 setup limits to read from a configuration file instead
 # 2.x Rewrite as python script
 
+# Change Log
+# RM-01 - Added alternative to resolve 1.01 issue search "RM-01-A"
 
 use strict;
 use warnings;
@@ -191,6 +194,10 @@ sub chk_ram
         print "count = $_ -- $free_row_2[$_]\n" if $debug;
 
         $total  = $free_row_2[$_] if $free_row_1[$_] =~ /total/;
+	# RM-01-A
+	# If the system does not display the proper memory use the following instead, the issue comes with the row count
+	# TODO: Make this automatic with a if statement in the future	
+        #$used   = $free_row_2[$_] if $free_row_1[$_] =~ /used/;
         $used   = $free_row_3[$_] if $free_row_1[$_] =~ /used/;
     }
 
