@@ -9,7 +9,7 @@
 # TODO
 # 1.01 Resolve :192 error about not finding any used ram due to a bad row count RM-01
 # 1.1 setup limits to read from a configuration file instead
-# 2.x Rewrite as python script
+# 2.x Rewrite as golang script
 
 # Change Log
 # RM-01 - Added alternative to resolve 1.01 issue search "RM-01-A"
